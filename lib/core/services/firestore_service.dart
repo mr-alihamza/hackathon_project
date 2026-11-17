@@ -88,10 +88,23 @@ class FirestoreService {
   }
 
   Future<void> saveGeneratedProjects(
-    List<Map<String, dynamic>> projects,
-  ) async {
+    List<Map<String, dynamic>> projects, {
+    String? generationId,
+  }) async {
     if (projects.isEmpty) {
       throw Exception('No projects were generated.');
+    }
+
+    // Prevent duplicate saves when a generation is retried.
+    if (generationId != null) {
+      final existing = await _projects
+          .where('generationId', isEqualTo: generationId)
+          .limit(1)
+          .get();
+
+      if (existing.docs.isNotEmpty) {
+        return;
+      }
     }
 
     final batch = _db.batch();
@@ -114,6 +127,9 @@ class FirestoreService {
 
       projectData['agentIds'] = agentIds;
       projectData['taskCount'] = tasks.length;
+      if (generationId != null) {
+        projectData['generationId'] = generationId;
+      }
       projectData['totalEstimatedHours'] = tasks.fold<double>(
         0,
         (total, task) => total + (task['estimatedHours'] as num).toDouble(),

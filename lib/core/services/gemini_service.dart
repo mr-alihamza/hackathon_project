@@ -1,169 +1,149 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
-import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 
-import '../../features/auth/models/user_model.dart';
-
+/// Client for the server-side AI project generation endpoint.
+///
+/// The Gemini API key lives only in the Cloud Function secret store; this
+/// service authenticates with the signed-in user's Firebase ID token and
+/// sends a stable [requestId] so retries never create duplicate generations.
 class GeminiService {
-  String get _apiKey {
-    final key = dotenv.env['GEMINI_API_KEY'];
+  static const _endpoint = String.fromEnvironment(
+    'AI_ENDPOINT',
+    defaultValue:
+        'https://us-central1-test-project-f69c6.cloudfunctions.net/generateProjects',
+  );
 
-    if (key == null || key.trim().isEmpty) {
-      throw Exception('Gemini API key is missing.');
-    }
+  static const _maxAttempts = 3;
+  static const _requestTimeout = Duration(seconds: 300);
 
-    return key.trim();
+  final http.Client _client = http.Client();
+
+  String newRequestId() {
+    final random = Random.secure();
+    final suffix = List.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+
+    return '${DateTime.now().microsecondsSinceEpoch}-$suffix';
   }
-
-  String get _model => dotenv.env['GEMINI_MODEL'] ?? 'gemini-3.8-flash';
 
   Future<Map<String, dynamic>> generateProjects({
     required String transcript,
-    required List<UserModel> team,
+    required String requestId,
   }) async {
     if (transcript.trim().isEmpty) {
       throw Exception('Please enter the meeting transcript.');
     }
 
-    final directory = team.map((member) {
-      return {
-        'employeeCode': member.employeeCode,
-        'name': member.name,
-        'role': member.role,
-        'specialization': member.specialization,
-        'skills': member.skills,
-      };
-    }).toList();
+    final user = FirebaseAuth.instance.currentUser;
 
-    final prompt =
-        '''
-You are an expert AI project manager for NovaWorks Technologies.
-
-Convert the supplied meeting transcript into structured project and task data.
-
-EXISTING TEAM DIRECTORY:
-${jsonEncode(directory)}
-
-IMPORTANT RULES:
-
-1. Use only employees in the supplied directory.
-2. Use employeeCode for managerCode and assigneeCode.
-3. Never invent employees.
-4. Never assign an ADMIN to a project or task.
-5. Every project must have one existing MANAGER.
-6. Every task must have one existing AGENT.
-7. Preserve final decisions and corrections from the transcript.
-8. Ignore rejected suggestions and future features.
-9. Do not create additional projects that were not agreed.
-10. Do not merge separate client projects.
-11. Project dates must use YYYY-MM-DD.
-12. Task dates must use YYYY-MM-DD.
-13. Task deadlines cannot be after their project deadline.
-14. Estimated hours must be positive numbers.
-15. Estimate developer work only.
-16. Do not create management-hour estimates.
-17. Do not include costs, budgets, progress, or completion percentages.
-18. Return every agreed task separately.
-19. Descriptions must reflect the agreed scope.
-20. Do not return markdown or explanatory text.
-
-EXPECTED JSON:
-
-{
-  "projects": [
-    {
-      "name": "Project name",
-      "clientName": "Client name",
-      "description": "Project description",
-      "managerCode": "PM01",
-      "deadline": "2026-10-20",
-      "tasks": [
-        {
-          "title": "Task title",
-          "description": "Task description",
-          "assigneeCode": "DEV01",
-          "deadline": "2026-10-12",
-          "estimatedHours": 12
-        }
-      ]
+    if (user == null) {
+      throw Exception('You must be signed in to generate projects.');
     }
-  ]
-}
 
-MEETING TRANSCRIPT:
+    final idToken = await user.getIdToken();
 
-$transcript
-''';
+    if (idToken == null) {
+      throw Exception('Could not authenticate the request.');
+    }
 
-    final uri = Uri.parse(
-      'https://generativelanguage.googleapis.com/v1beta/'
-      'models/$_model:generateContent?key=$_apiKey',
-    );
+    Object? lastError;
 
-    final response = await http
+    for (var attempt = 0; attempt < _maxAttempts; attempt++) {
+      try {
+        return await _post(idToken, transcript, requestId);
+      } on _RetryableException catch (e) {
+        lastError = e;
+
+        if (attempt == _maxAttempts - 1) break;
+
+        await Future<void>.delayed(_backoff(attempt));
+      }
+    }
+
+    throw lastError ?? Exception('AI generation failed. Please try again.');
+  }
+
+  Duration _backoff(int attempt) {
+    // Exponential backoff: ~2s, ~6s plus jitter.
+    final base = 2000 * pow(3, attempt).round();
+    final jitter = Random().nextInt(500);
+
+    return Duration(milliseconds: base + jitter);
+  }
+
+  Future<Map<String, dynamic>> _post(
+    String idToken,
+    String transcript,
+    String requestId,
+  ) async {
+    final response = await _client
         .post(
-          uri,
-          headers: {'Content-Type': 'application/json'},
+          Uri.parse(_endpoint),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $idToken',
+          },
           body: jsonEncode({
-            'contents': [
-              {
-                'parts': [
-                  {'text': prompt},
-                ],
-              },
-            ],
-            'generationConfig': {
-              'temperature': 0.1,
-              'responseMimeType': 'application/json',
-              'maxOutputTokens': 8192,
-            },
+            'transcript': transcript,
+            'requestId': requestId,
           }),
         )
-        .timeout(const Duration(seconds: 90));
+        .timeout(_requestTimeout);
 
-    if (response.statusCode != 200) {
-      throw Exception(_extractError(response.body));
-    }
+    Map<String, dynamic> body = {};
 
-    final responseData = jsonDecode(response.body);
-
-    final candidates = responseData['candidates'] as List?;
-
-    if (candidates == null || candidates.isEmpty) {
-      throw Exception('Gemini did not generate a response.');
-    }
-
-    final parts = candidates.first['content']['parts'] as List;
-
-    final generatedText = parts
-        .where((part) => part['text'] != null)
-        .map((part) => part['text'].toString())
-        .join();
-
-    if (generatedText.trim().isEmpty) {
-      throw Exception('Gemini returned an empty response.');
-    }
-
-    final decoded = jsonDecode(generatedText);
-
-    if (decoded is! Map<String, dynamic>) {
-      throw Exception('Gemini returned an invalid JSON structure.');
-    }
-
-    if (decoded['projects'] is! List) {
-      throw Exception('Generated projects are missing.');
-    }
-
-    return decoded;
-  }
-
-  String _extractError(String body) {
     try {
-      final data = jsonDecode(body);
-      return data['error']?['message'] ?? 'Gemini request failed.';
+      final decoded = jsonDecode(response.body);
+      if (decoded is Map<String, dynamic>) {
+        body = decoded;
+      }
     } catch (_) {
-      return 'Gemini request failed. Please try again.';
+      // Non-JSON error body; fall back to the HTTP status message below.
     }
+
+    if (response.statusCode == 200) {
+      final result = body['projects'];
+
+      if (result is! List) {
+        throw Exception('AI returned an invalid project structure.');
+      }
+
+      return body;
+    }
+
+    final message = body['error'] is String
+        ? body['error'] as String
+        : 'AI generation failed (HTTP ${response.statusCode}).';
+
+    if (_isRetryableStatus(response.statusCode)) {
+      throw _RetryableException(message);
+    }
+
+    throw Exception(message);
   }
+
+  bool _isRetryableStatus(int status) {
+    // 409 means a previous attempt is still running; surface it as a normal
+    // error because retrying immediately would not help.
+    return status == 408 || status == 429 || status >= 500;
+  }
+
+  void dispose() {
+    _client.close();
+  }
+}
+
+class _RetryableException implements Exception {
+  _RetryableException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
 }

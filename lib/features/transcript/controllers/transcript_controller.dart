@@ -14,8 +14,14 @@ class TranscriptController extends GetxController {
   final transcriptController = TextEditingController();
 
   final isLoading = false.obs;
+  final statusMessage = ''.obs;
   final generatedProjects = <Map<String, dynamic>>[].obs;
   final validationErrors = <String>[].obs;
+
+  // A stable requestId is reused when the user retries the same transcript so
+  // the server can deduplicate in-flight or completed generations.
+  String? _requestId;
+  String? _requestTranscript;
 
   int get totalProjects => generatedProjects.length;
 
@@ -46,15 +52,25 @@ class TranscriptController extends GetxController {
 
     try {
       isLoading.value = true;
+      statusMessage.value = 'Sending transcript to AI service...';
       validationErrors.clear();
       generatedProjects.clear();
 
       final team = await _firestore.getTeamMembers();
 
+      if (_requestTranscript != transcript || _requestId == null) {
+        _requestId = _gemini.newRequestId();
+        _requestTranscript = transcript;
+      }
+
+      statusMessage.value = 'AI is analyzing the meeting (this can take a few minutes)...';
+
       final draft = await _gemini.generateProjects(
         transcript: transcript,
-        team: team,
+        requestId: _requestId!,
       );
+
+      statusMessage.value = 'Validating generated projects...';
 
       final projects = _validateAndMap(draft, team);
 
@@ -67,7 +83,15 @@ class TranscriptController extends GetxController {
       }
 
       // Save only after every project and task passes validation.
-      await _firestore.saveGeneratedProjects(projects);
+      await _firestore.saveGeneratedProjects(
+        projects,
+        generationId: _requestId,
+      );
+
+      // Generation succeeded; the next attempt starts a fresh requestId.
+      _requestId = null;
+      _requestTranscript = null;
+      statusMessage.value = '';
 
       generatedProjects.assignAll(projects);
 
@@ -77,6 +101,7 @@ class TranscriptController extends GetxController {
         snackPosition: SnackPosition.BOTTOM,
       );
     } catch (e) {
+      statusMessage.value = '';
       Get.snackbar(
         'Creation failed',
         e.toString().replaceFirst('Exception: ', ''),

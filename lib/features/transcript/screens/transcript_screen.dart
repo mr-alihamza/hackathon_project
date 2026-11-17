@@ -71,6 +71,40 @@ class TranscriptScreen extends GetView<TranscriptController> {
             ),
           ),
           Obx(() {
+            if (!controller.isLoading.value &&
+                controller.statusMessage.value.isEmpty) {
+              return const SizedBox.shrink();
+            }
+
+            return Padding(
+              padding: const EdgeInsets.only(top: 12),
+              child: Row(
+                children: [
+                  if (controller.isLoading.value)
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  else
+                    const SizedBox(width: 14),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      controller.isLoading.value
+                          ? '${controller.statusMessage.value} Please keep this screen open.'
+                          : controller.statusMessage.value,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+          Obx(() {
             if (controller.validationErrors.isEmpty) {
               return const SizedBox.shrink();
             }

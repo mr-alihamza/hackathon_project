@@ -1,0 +1,13 @@
+{
+  "name": "novaworks-functions",
+  "description": "NovaWorks backend functions (AI project generation proxy)",
+  "engines": {
+    "node": "22"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^7.4.0"
+  },
+  "private": true
+}

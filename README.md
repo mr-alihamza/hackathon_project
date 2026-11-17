@@ -4,26 +4,21 @@ NovaWorks CRM — Flutter app with Firebase backend and AI-powered project creat
 
 ## AI project generation (Gemini)
 
-The Gemini API key is **never shipped to the client**. The app calls a
-Cloudflare Worker proxy (`worker/`), which holds the key as a secret, verifies
-the caller is an ADMIN via Firebase Auth, retries transient failures with
-exponential backoff + model fallback, and deduplicates requests by `requestId`
-in KV storage. (A `functions/` Cloud Function version is also included if you
-ever upgrade to the Blaze plan.)
+The app calls the Gemini API directly via `lib/core/services/gemini_service.dart`.
+Configuration lives in the `.env` file (bundled as an asset, git-ignored):
 
-### Deploy the worker (free tier)
-
-```bash
-cd worker
-npm install
-npx wrangler login
-npx wrangler kv namespace create AI_REQUESTS   # copy the id into wrangler.toml
-npx wrangler secret put GEMINI_API_KEY        # paste your Gemini key
-npm run deploy
+```
+GEMINI_API_KEY=...   # from Google AI Studio
+GEMINI_MODEL=gemini-3.8-flash
 ```
 
-Then set the worker URL in `lib/core/services/gemini_service.dart`
-(`AI_ENDPOINT` dart-define or the `defaultValue`).
+The service retries transient failures (429/5xx, network errors, timeouts)
+with exponential backoff, falls back to `gemini-flash-latest` if the
+configured model is unavailable, sends the API key in a header (not the URL),
+and validates the generated JSON before anything is saved to Firestore.
+
+NOTE: the API key ships inside the app binary. Restrict and rotate it in
+Google AI Studio if the app is distributed.
 
 ## Getting Started
 

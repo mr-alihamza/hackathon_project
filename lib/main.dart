@@ -15,6 +15,8 @@ Future<void> main() async {
 
   await dotenv.load(fileName: '.env');
 
+  await dotenv.load(fileName: '.env');
+
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
   Get.put(AuthService(), permanent: true);

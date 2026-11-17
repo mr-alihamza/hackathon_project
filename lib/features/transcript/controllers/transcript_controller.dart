@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
@@ -18,10 +20,10 @@ class TranscriptController extends GetxController {
   final generatedProjects = <Map<String, dynamic>>[].obs;
   final validationErrors = <String>[].obs;
 
-  // A stable requestId is reused when the user retries the same transcript so
-  // the server can deduplicate in-flight or completed generations.
-  String? _requestId;
-  String? _requestTranscript;
+  // A stable generationId is reused when the user retries the same transcript
+  // so a retried save cannot create duplicate projects in Firestore.
+  String? _generationId;
+  String? _generationTranscript;
 
   int get totalProjects => generatedProjects.length;
 
@@ -58,16 +60,16 @@ class TranscriptController extends GetxController {
 
       final team = await _firestore.getTeamMembers();
 
-      if (_requestTranscript != transcript || _requestId == null) {
-        _requestId = _gemini.newRequestId();
-        _requestTranscript = transcript;
+      if (_generationTranscript != transcript || _generationId == null) {
+        _generationId = _newGenerationId();
+        _generationTranscript = transcript;
       }
 
       statusMessage.value = 'AI is analyzing the meeting (this can take a few minutes)...';
 
       final draft = await _gemini.generateProjects(
         transcript: transcript,
-        requestId: _requestId!,
+        team: team,
       );
 
       statusMessage.value = 'Validating generated projects...';
@@ -85,12 +87,12 @@ class TranscriptController extends GetxController {
       // Save only after every project and task passes validation.
       await _firestore.saveGeneratedProjects(
         projects,
-        generationId: _requestId,
+        generationId: _generationId,
       );
 
-      // Generation succeeded; the next attempt starts a fresh requestId.
-      _requestId = null;
-      _requestTranscript = null;
+      // Generation succeeded; the next attempt starts a fresh id.
+      _generationId = null;
+      _generationTranscript = null;
       statusMessage.value = '';
 
       generatedProjects.assignAll(projects);
@@ -259,6 +261,16 @@ class TranscriptController extends GetxController {
     validationErrors.assignAll(errors);
 
     return errors.isEmpty ? result : [];
+  }
+
+  String _newGenerationId() {
+    final random = Random.secure();
+    final suffix = List.generate(
+      16,
+      (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0'),
+    ).join();
+
+    return '${DateTime.now().microsecondsSinceEpoch}-$suffix';
   }
 
   String? _requiredString(Map<String, dynamic> map, String key) {

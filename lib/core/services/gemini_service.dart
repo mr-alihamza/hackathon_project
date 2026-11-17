@@ -11,10 +11,11 @@ import 'package:http/http.dart' as http;
 /// service authenticates with the signed-in user's Firebase ID token and
 /// sends a stable [requestId] so retries never create duplicate generations.
 class GeminiService {
+  // Cloudflare Worker URL — set the real URL after `wrangler deploy`, or pass
+  // --dart-define=AI_ENDPOINT=https://<worker>.<subdomain>.workers.dev
   static const _endpoint = String.fromEnvironment(
     'AI_ENDPOINT',
-    defaultValue:
-        'https://us-central1-test-project-f69c6.cloudfunctions.net/generateProjects',
+    defaultValue: 'https://novaworks-ai.REPLACE-ME.workers.dev',
   );
 
   static const _maxAttempts = 3;

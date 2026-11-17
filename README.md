@@ -4,30 +4,26 @@ NovaWorks CRM — Flutter app with Firebase backend and AI-powered project creat
 
 ## AI project generation (Gemini)
 
-The Gemini API key is **never shipped to the client**. The app calls the
-`generateProjects` Cloud Function (`functions/index.js`), which holds the key
-as a secret, verifies the caller is an ADMIN, retries transient failures with
-exponential backoff, and deduplicates requests via `requestId`.
+The Gemini API key is **never shipped to the client**. The app calls a
+Cloudflare Worker proxy (`worker/`), which holds the key as a secret, verifies
+the caller is an ADMIN via Firebase Auth, retries transient failures with
+exponential backoff + model fallback, and deduplicates requests by `requestId`
+in KV storage. (A `functions/` Cloud Function version is also included if you
+ever upgrade to the Blaze plan.)
 
-### One-time setup
+### Deploy the worker (free tier)
 
 ```bash
-npm install -g firebase-tools
-firebase login
-firebase use test-project-f69c6
-
-cd functions && npm install && cd ..
-firebase functions:secrets:set GEMINI_API_KEY   # paste your Gemini key
-firebase deploy --only functions
+cd worker
+npm install
+npx wrangler login
+npx wrangler kv namespace create AI_REQUESTS   # copy the id into wrangler.toml
+npx wrangler secret put GEMINI_API_KEY        # paste your Gemini key
+npm run deploy
 ```
 
-Optional: set `GEMINI_MODEL` (defaults to `gemini-3.8-flash`) in a
-`functions/.env` file — non-secret env vars are picked up automatically.
-
-The client endpoint defaults to
-`https://us-central1-test-project-f69c6.cloudfunctions.net/generateProjects`.
-Override at build time with `--dart-define=AI_ENDPOINT=...` if the function is
-deployed elsewhere.
+Then set the worker URL in `lib/core/services/gemini_service.dart`
+(`AI_ENDPOINT` dart-define or the `defaultValue`).
 
 ## Getting Started
 

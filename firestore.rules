@@ -1,0 +1,112 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDocument() {
+      return get(
+        /databases/$(database)/documents/users/$(request.auth.uid)
+      );
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && userDocument().data.role == 'ADMIN';
+    }
+
+    function isManager() {
+      return signedIn()
+        && userDocument().data.role == 'MANAGER';
+    }
+
+    function isAgent() {
+      return signedIn()
+        && userDocument().data.role == 'AGENT';
+    }
+
+    function projectExists(projectId) {
+      return exists(
+        /databases/$(database)/documents/projects/$(projectId)
+      );
+    }
+
+    function canReadProject(projectId) {
+      let project = get(
+        /databases/$(database)/documents/projects/$(projectId)
+      );
+
+      return isAdmin()
+        || (
+          isManager()
+          && project.data.managerId == request.auth.uid
+        )
+        || (
+          isAgent()
+          && request.auth.uid in project.data.agentIds
+        );
+    }
+
+    // USER DIRECTORY
+
+    match /users/{userId} {
+      allow read: if signedIn();
+
+      // Accounts are managed through the trusted seeder.
+      allow create, update, delete: if false;
+    }
+
+    // PROJECTS
+
+    match /projects/{projectId} {
+
+      allow read: if signedIn()
+        && (
+          isAdmin()
+          || (
+            isManager()
+            && resource.data.managerId == request.auth.uid
+          )
+          || (
+            isAgent()
+            && request.auth.uid in resource.data.agentIds
+          )
+        );
+
+      allow create: if isAdmin()
+        && request.resource.data.managerId is string
+        && request.resource.data.agentIds is list;
+
+      allow update, delete: if isAdmin();
+    }
+
+    // TASKS
+
+    match /tasks/{taskId} {
+
+      allow read: if signedIn()
+        && (
+          isAdmin()
+          || (
+            isAgent()
+            && resource.data.assigneeId == request.auth.uid
+          )
+          || (
+            isManager()
+            && canReadProject(resource.data.projectId)
+          )
+        );
+
+      allow create: if isAdmin()
+        && request.resource.data.projectId is string
+        && existsAfter(
+          /databases/$(database)/documents/projects/$(request.resource.data.projectId)
+        );
+
+      allow update, delete: if isAdmin();
+    }
+  }
+}
